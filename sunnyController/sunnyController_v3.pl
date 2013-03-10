@@ -6,19 +6,28 @@ use POSIX qw/strftime/;
 use std_functions;
 use controller_config;
 
-# CONNECT TO MSSQL
-my $connect = connectMYSQL();
-my ($query,$queryHANDLE);
-my $sProcess = 'start';
-my $isAutoTest = 0;
 
 my $scriptStartTimestamp = timestampUnderLine(time());
+
+my $ARGC = scalar(@ARGV);
+# timeout check. solution: fork & wait pid
+if($ARGC > 0){
+	my $tArgvIndex = 0;
+}
+
+
+
 # Declare variables
+	my $connect = connectMYSQL();
+	my ($query,$queryHANDLE);
+	my $sProcess = 'NA'; # current function / process name.
+
 	# Test configurations
 	#my $exp_number;
 	my $test_number;
 	my $traceFile;
 	my $startTestTime;
+
 	# Configuration
 	my $cur_delay;
 	my $cur_jitter;
@@ -30,40 +39,40 @@ my $scriptStartTimestamp = timestampUnderLine(time());
 	my $cur_tcps_buf;
 	my $cur_player_buf;
 	my $cur_res;	
+
 	# Result
 	my $init_buf;
 	my $m_rebuf_time;
 	my $rebuf_count;
 	my $stat_loss;
 	my $stat_delay;
+
 	# Others
-	my $exitFlag = 0;
-	my ($userinput,$command,$value);
+	my ($cmdInput,$command,$value);
 	my $rx_buf;
 	my $socket_videoplayer;
-
-# Clear console screen
-	#system('clear');
-
 # Reset test
 	default_config();
 	#setConfig();
 	reset_result();
-
-
-# Check managers
 	#checkManagers();
+	#system('clear'); # clear screen
 
 startPlayer();
 $socket_videoplayer = Connect_Videoplayer(); # Waiting for video player connection
 setRES('1080p');
 setPBUF('3');
 
-while($exitFlag eq 0){
-	# Wait for keyboard input
-	print "<- ";$userinput = <STDIN>;
-	#chomp($userinput);
-	($command, $value) = extract_userinput($userinput);
+while(1){
+	if ($ARGC == 0){
+		print "<- ";
+		$cmdInput = <STDIN>;
+		#chomp($cmdInput);
+	}else{
+		$cmdInput = $ARGV[$tArgvIndex];
+	}
+
+	($command, $value) = extract_cmdInput($cmdInput);
 
 	switch($command){
 		case("show"){
@@ -77,9 +86,6 @@ while($exitFlag eq 0){
 			$socket_videoplayer->send("play:\n");
 			$socket_videoplayer->recv($rx_buf,128);
 			console("Videoplayer return: $rx_buf");
-		}
-		case("exit"){
-			$exitFlag = 1;
 		}
 		case("setRES"){
 			if(setRES($value)==1){
@@ -107,8 +113,8 @@ while($exitFlag eq 0){
 		}
 		case("setCBUF"){
 			if(setCBUF($value)==1){
-					$cur_tcpc_buf = $value;
-					reset_result();
+				$cur_tcpc_buf = $value;
+				reset_result();
 			}
 		}
 		case("setPBUF"){
@@ -134,16 +140,31 @@ while($exitFlag eq 0){
 				consoleNlog("Start: $1 Stop: $2");
 				startTest($1, $2);
 		}
+		case("exit"){
+			exitController();
+		}
 		else{
-			console("ERR: Unknow command $command");
+			console("CRAP:ERR: Unknow command $command");
+		}
+	}
+
+	if ($ARGC != 0){
+		$tArgvIndex = 1 + $tArgvIndex;
+		if ($tArgvIndex == $ARGC){
+			play();
+			last;
 		}
 	}
 }
 
+exitController();
+
+sub exitController(){
 	close($socket_videoplayer);
+	exit(0);
+}
 
 sub startTest{
-	$isAutoTest = 1;
 	$connect = connectMYSQL();
 	my $startTest = $_[0];
 	my $stopTest 	= $_[1];
@@ -178,49 +199,47 @@ sub startTest{
 	setPBUF('3');
 	$test_number--;
 	system ("perl email.pl done$exp_number.$test_number");
-	system ("perl email.pl done$exp_number.$test_number ".' wiup10@student.bth.se');
 	system ("echo '' >> /home/ats/thesis/dropbox_sync_fs/EE-getConsumerPid.log");
-	$isAutoTest = 0;
 }
 
 sub play{
 	$sProcess = 'play';
-	# review config
-	#show();
-	if(setConfig()){
-		if(syncMP()){
-			$startTestTime = time();
-			if(startConsumer($startTestTime)!=1){
-				consoleNlog("ERR: fail to start consumer");
-				exit;
-			}
-			# send play
-			$socket_videoplayer->send("play:");
-			$socket_videoplayer->recv($rx_buf,128);
-			consoleNlog("Videoplayer return: $rx_buf");
-			# get result
-			if(foundERR($rx_buf)){
-				consoleNlog("ERR: return result are error");
-			}else{
-				($init_buf,$rebuf_count,$m_rebuf_time) = extract_qod($rx_buf);
-			}
-			#if($isAutoTest){ # only auto test using 'play'
-				stopPlayer();
-			#}
-			if(stopConsumer()!=1){
-				consoleNlog("ERR: fail to stop Consumer");
-				exit;
-			}
-			$stat_loss = getStatLoss();
-			print "getStatLoss->:$stat_loss";
-			$stat_delay = getStatDelay();
-			print "getStatDelay:$stat_delay";
-		}else{
-			consoleNlog("ERR: fail to sync MP");
-		}
-	}else{
+	$startTestTime = time();
+	#show(); # review config
+
+	if(!setConfig()){
 		consoleNlog("ERR: fail to set configs");
+		return 1;
 	}
+	#if(!syncMP()){
+		#consoleNlog("ERR: fail to sync MP");
+		#return 1;
+	#}
+	#if(!startConsumer($startTestTime)){
+		#consoleNlog("ERR: fail to start consumer");
+		#exit;
+	#}
+
+	# play
+	$socket_videoplayer->send("play:");
+	$socket_videoplayer->recv($rx_buf,128);
+	consoleNlog("Player return: $rx_buf");
+
+	# get result
+	if(foundERR($rx_buf)){
+		consoleNlog("ERR: returned result is invalid.");
+	}else{
+		($init_buf,$rebuf_count,$m_rebuf_time) = extract_qod($rx_buf);
+	}
+	stopPlayer();
+	#if(!stopConsumer()){
+		#consoleNlog("ERR: fail to stop Consumer");
+		#exit;
+	#}
+	#$stat_loss = getStatLoss();
+	#print "getStatLoss->:$stat_loss";
+	#$stat_delay = getStatDelay();
+	#print "getStatDelay:$stat_delay";
 }
 
 #sub startMp{
@@ -566,11 +585,9 @@ sub syncMP{
 	return 1;
 }
 
-sub extract_userinput{
+sub extract_cmdInput{
 	chomp($_);
-	$_[0] =~ /^([a-zA-Z]+) *(.*)$/;
-	# $1 = command
-	# $2 = value
+	$_[0] =~ /^([a-zA-Z]+):(.*)$/; # $1 = command ; $2 = value
 	return ($1,$2);
 }
 
